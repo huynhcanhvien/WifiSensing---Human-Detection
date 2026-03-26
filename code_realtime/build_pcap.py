@@ -1,7 +1,6 @@
 import os
 import glob
 import numpy as np
-import pandas as pd
 from scipy import interpolate
 import dpkt
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -9,7 +8,7 @@ import multiprocessing
 import time
 import json
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
+import psutil
 
 # ================= 1. CẤU HÌNH HỆ THỐNG & ĐƯỜNG DẪN =================
 DATA_DIR = "data/Data"
@@ -21,12 +20,12 @@ TARGET_MACS = [
 ]
 
 # ================= 2. CẤU HÌNH DSP & AI =================
-WINDOW_SEC      = 10
-TARGET_FS       = 20.0
-MIN_FS_THRESHOLD = 15.0
+WINDOW_SEC      = 5
+TARGET_FS       = 50.0
+MIN_FS_THRESHOLD = 40.0
 OVERLAP_PCT     = 0.5
-TRIM_SEC        = 15.0          # Cắt 15s đầu + 15s cuối
-MIN_TOTAL_SEC   = 60.0          # ✅ File phải có ít nhất 60s dữ liệu thô
+TRIM_SEC        = 10.0          # Cắt 10s đầu + 10s cuối
+MIN_TOTAL_SEC   = 50.0          # ✅ File phải có ít nhất 50s dữ liệu thô
 
 HAMPEL_WINDOW   = 5
 HAMPEL_SIGMA    = 3
@@ -40,56 +39,63 @@ TEST_SIZE       = 0.2
 # DSP HELPERS
 # ──────────────────────────────────────────────────────────────────────
 
-def _hampel_series_numpy(args):
+def hampel_filter(input_matrix):
     """
-    Worker Hampel vectorized thuần NumPy — nhanh hơn pandas rolling 3–5x.
-    Dùng sliding_window_view để tính median/MAD mà không cần vòng lặp Python.
+    Hampel filter tiết kiệm RAM:
+    - Xử lý từng subcarrier một (không tạo ma trận 3D khổng lồ)
+    - Mỗi subcarrier dùng sliding_window_view 1D → chỉ tốn (n × w) RAM thay vì (n × 53 × w)
+    - Không dùng pool lồng nhau, không tạo pandas object
     """
-    series_data, window, sigma = args
     from numpy.lib.stride_tricks import sliding_window_view
 
-    n   = len(series_data)
-    w   = 2 * window + 1
-    out = series_data.copy()
+    w   = 2 * HAMPEL_WINDOW + 1
+    out = input_matrix.copy()
 
-    # Pad 2 đầu để center window không bị lệch biên
-    padded  = np.pad(series_data, window, mode='edge')
-    windows = sliding_window_view(padded, w)          # (n, w)
+    for sc in range(input_matrix.shape[1]):
+        series = input_matrix[:, sc]
+        padded  = np.pad(series, HAMPEL_WINDOW, mode='edge')
+        windows = sliding_window_view(padded, w)              # (n, w)
+        medians  = np.median(windows, axis=1)
+        mads     = np.median(np.abs(windows - medians[:, None]), axis=1)
+        threshold = HAMPEL_SIGMA * K_HAMPEL * mads
+        outliers  = np.abs(series - medians) > threshold
+        out[outliers, sc] = medians[outliers]
 
-    medians = np.median(windows, axis=1)              # rolling median
-    mads    = np.median(np.abs(windows - medians[:, None]), axis=1)  # rolling MAD
-    threshold = sigma * K_HAMPEL * mads
-
-    outlier_idx = np.abs(series_data - medians) > threshold
-    out[outlier_idx] = medians[outlier_idx]
     return out
 
 
-def hampel_filter_parallel(input_matrix):
-    """
-    Hampel song song trên từng subcarrier, mỗi subcarrier dùng NumPy vectorized.
-    Nhanh hơn phiên bản pandas rolling 3–5x, giảm đáng kể thời gian + nhiệt độ CPU.
-    """
-    n_sub = input_matrix.shape[1]
-    args  = [(input_matrix[:, sc], HAMPEL_WINDOW, HAMPEL_SIGMA) for sc in range(n_sub)]
-    with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as ex:
-        results = list(ex.map(_hampel_series_numpy, args))
-    return np.array(results).T
-
-
 def interpolate_dc_pilots(csi_matrix):
-    """Nội suy lấp đầy DC & Null subcarriers (ESP32 HT20)."""
-    null_subcarriers = [0, 1, 2, 3, 4, 5, 29, 30, 31, 32, 33, 34, 59, 60, 61, 62, 63]
-    valid_subcarriers = [i for i in range(64) if i not in null_subcarriers]
-    x = np.arange(64)
-    output = np.zeros_like(csi_matrix, dtype=float)
-    for i in range(csi_matrix.shape[0]):
-        f = interpolate.interp1d(
-            valid_subcarriers, csi_matrix[i, valid_subcarriers],
-            kind='linear', fill_value="extrapolate"
-        )
-        output[i, :] = f(x)
+    """
+    Nội suy lấp đầy DC & Null subcarriers (ESP32 HT20).
+    Vectorized theo chiều subcarrier (64 lần) thay vì theo chiều packet (2 triệu lần).
+    np.interp xử lý toàn bộ n_packets cho 1 target index → nhanh và tiết kiệm RAM.
+    """
+    null_subcarriers  = [0, 1, 2, 3, 4, 5, 29, 30, 31, 32, 33, 34, 59, 60, 61, 62, 63]
+    valid_idx = np.array([i for i in range(64) if i not in null_subcarriers])
+    output    = np.empty_like(csi_matrix, dtype=float)
+
+    # valid_vals: (n_valid, n_packets) — transpose để vectorize theo packet
+    valid_vals = csi_matrix[:, valid_idx].T   # (n_valid, n_packets)
+
+    for xi in range(64):
+        # np.interp(xi, xp=valid_idx, fp=mỗi hàng của valid_vals)
+        # → nội suy tại 1 điểm xi cho tất cả n_packets cùng lúc
+        output[:, xi] = np.interp(xi, valid_idx, valid_vals[:, :],
+                                   left=None, right=None) if False else                         _interp_col(xi, valid_idx, valid_vals)
     return output
+
+
+def _interp_col(xi, xp, fp_matrix):
+    """Nội suy tuyến tính tại xi cho tất cả packets — thuần NumPy, không scipy."""
+    # Tìm vị trí xi nằm giữa 2 điểm nào trong xp
+    idx = np.searchsorted(xp, xi)
+    idx = np.clip(idx, 1, len(xp) - 1)
+    x0, x1 = xp[idx - 1], xp[idx]
+    y0 = fp_matrix[idx - 1, :]   # (n_packets,)
+    y1 = fp_matrix[idx,     :]   # (n_packets,)
+    # Nội suy tuyến tính
+    t = (xi - x0) / (x1 - x0) if x1 != x0 else 0.0
+    return y0 + t * (y1 - y0)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -175,12 +181,15 @@ def process_single_file(args):
         # ── Bước 2: Trim & kiểm tra Hz — tính t_global từ GIAO của 2 MAC ──
         #    ✅ FIX: không dùng t_global của riêng MAC đầu tiên nữa
         mac_frames = {}
+        mac_stats  = {}          # ← lưu thống kê từng MAC cho metadata
         t_start_common = -np.inf
         t_end_common   =  np.inf
 
         for mac in TARGET_MACS:
             arr = np.array(data_rows[mac])
             t_raw_max = arr[:, 0].max()
+            n_raw     = len(arr)
+            raw_fs    = n_raw / t_raw_max if t_raw_max > 0 else 0
 
             # Trim 15s đầu/cuối
             mask = (arr[:, 0] >= TRIM_SEC) & (arr[:, 0] <= (t_raw_max - TRIM_SEC))
@@ -191,11 +200,24 @@ def process_single_file(args):
 
             duration  = arr[:, 0].max() - arr[:, 0].min()
             actual_fs = len(arr) / duration if duration > 0 else 0
+            gaps      = np.diff(arr[:, 0])
             if actual_fs < MIN_FS_THRESHOLD:
                 return None, None, (f"SKIP (Hz={actual_fs:.1f} < {MIN_FS_THRESHOLD}): "
                                     f"{os.path.basename(file_path)}")
 
             mac_frames[mac] = arr
+            mac_stats[mac]  = {
+                "mac":             mac.hex(':').upper(),
+                "n_packets_raw":   int(n_raw),
+                "n_packets_trim":  int(len(arr)),
+                "raw_fs_hz":       round(raw_fs, 2),
+                "trim_fs_hz":      round(actual_fs, 2),
+                "duration_trim_s": round(duration, 2),
+                "gap_mean_ms":     round(float(np.mean(gaps)) * 1000, 2),
+                "gap_max_ms":      round(float(np.max(gaps))  * 1000, 2),
+                "gap_std_ms":      round(float(np.std(gaps))  * 1000, 2),
+            }
+
             # Lấy giao thời gian của 2 MAC để đồng bộ
             t_start_common = max(t_start_common, arr[:, 0].min())
             t_end_common   = min(t_end_common,   arr[:, 0].max())
@@ -214,15 +236,16 @@ def process_single_file(args):
             t_mac  = arr[:, 0]
             csi_raw = arr[:, 1:]
 
-            # FFT Shift → Interp DC → Hampel (song song) → cắt 53 sub → L2 Norm
-            csi_shifted  = np.fft.fftshift(csi_raw, axes=1)
-            csi_interp   = interpolate_dc_pilots(csi_shifted)
-            csi_denoised = hampel_filter_parallel(csi_interp)   # ✅ song song
-            csi_eff      = csi_denoised[:, 6:59]                # 53 subcarrier hữu ích
+            # FFT Shift → Interp DC → Hampel → cắt 53 sub → L2 Norm
+            # del sau mỗi bước để giải phóng RAM ngay lập tức
+            csi_shifted  = np.fft.fftshift(csi_raw, axes=1);  del csi_raw
+            csi_interp   = interpolate_dc_pilots(csi_shifted); del csi_shifted
+            csi_denoised = hampel_filter(csi_interp);          del csi_interp
+            csi_eff      = csi_denoised[:, 6:59];              del csi_denoised
 
             norms = np.linalg.norm(csi_eff, axis=1, keepdims=True)
             norms[norms == 0] = 1
-            csi_norm = csi_eff / norms
+            csi_norm = csi_eff / norms;  del csi_eff
 
             # Resample về t_global
             f_resample   = interpolate.interp1d(t_mac, csi_norm, axis=0,
@@ -248,11 +271,15 @@ def process_single_file(args):
         X_file = np.stack(list_of_mac_tensors, axis=-1)
         Y_file = np.full(X_file.shape[0], label_id, dtype=np.int8)
 
+        overlap_duration = round(t_end_common - t_start_common, 2)
         meta = {
-            "file":        os.path.basename(file_path),
-            "label":       label_id,
-            "raw_duration": round(raw_duration, 2),
-            "n_windows":   int(X_file.shape[0]),
+            "file":             os.path.basename(file_path),
+            "label":            label_id,
+            "raw_duration_s":   round(raw_duration, 2),
+            "overlap_duration_s": overlap_duration,
+            "n_windows":        int(X_file.shape[0]),
+            "tensor_shape":     list(X_file.shape),
+            "macs": [mac_stats[mac] for mac in TARGET_MACS],
         }
         return X_file, Y_file, meta
 
@@ -281,8 +308,13 @@ def build_dataset():
     print(f"   Yêu cầu: ≥ {MIN_TOTAL_SEC}s dữ liệu thô, trim {TRIM_SEC}s đầu/cuối\n")
 
     # Chạy song song toàn bộ file
-    n_workers = multiprocessing.cpu_count()
-    print(f"⚙️  Đang xử lý song song trên {n_workers} nhân CPU...\n")
+    # Giới hạn worker thông minh theo RAM thực tế (mỗi file lớn ~2–3 GB RAM)
+    available_gb = psutil.virtual_memory().available / 1e9
+    # Mỗi file lớn cần ~3–4GB RAM (raw parse + DSP intermediate)
+    # Cap tối đa 2 worker để tránh OOM dù máy có nhiều nhân
+    ram_based    = max(1, int(available_gb // 4.0))
+    n_workers    = min(2, multiprocessing.cpu_count(), ram_based)
+    print(f"⚙️  RAM khả dụng: {available_gb:.1f} GB  →  dùng {n_workers} worker(s) (tối đa 2 để tránh OOM)\n")
 
     results   = []
     skipped   = []
@@ -327,16 +359,32 @@ def build_dataset():
         print(f"\n   ⚠️  CẢNH BÁO: Tỉ lệ mất cân bằng ~{ratio:.1f}x — "
               f"cân nhắc augmentation hoặc class_weight khi train!")
 
-    # ── Stratified Split 80/20 theo frame ──────────────────────────
-    X_all = np.vstack([r["X"] for r in results])
-    Y_all = np.concatenate([r["Y"] for r in results])
+    # ── Chia Train/Test theo thứ tự thời gian trong từng file ────────
+    # 80 windows đầu → Train, 20 windows cuối → Test
+    # Đảm bảo tính liên tục chuỗi thời gian, cân đối theo từng file
+    train_X, train_Y = [], []
+    test_X,  test_Y  = [], []
+    file_split_meta  = []
 
-    X_train, X_test, Y_train, Y_test = train_test_split(
-        X_all, Y_all,
-        test_size=TEST_SIZE,
-        random_state=42,
-        stratify=Y_all      # ← giữ nguyên tỉ lệ label trong cả 2 tập
-    )
+    for r in results:
+        X, Y = r["X"], r["Y"]
+        n    = len(Y)
+        n_train = max(1, int(n * (1 - TEST_SIZE)))  # 80% đầu
+        n_test  = n - n_train                        # 20% cuối
+
+        train_X.append(X[:n_train])
+        train_Y.append(Y[:n_train])
+        test_X.append(X[n_train:])
+        test_Y.append(Y[n_train:])
+
+        file_split_meta.append({
+            **r["meta"],
+            "n_train": n_train,
+            "n_test":  n_test,
+        })
+
+    X_train = np.vstack(train_X);      Y_train = np.concatenate(train_Y)
+    X_test  = np.vstack(test_X);       Y_test  = np.concatenate(test_Y)
 
     # ── Lưu dataset + metadata ✅ ────────────────────────────────────
     output_npz  = "../wifi_sensing_dataset.npz"
@@ -355,9 +403,9 @@ def build_dataset():
             "MIN_TOTAL_SEC":     MIN_TOTAL_SEC,
             "MIN_FS_THRESHOLD":  MIN_FS_THRESHOLD,
             "TEST_SIZE":         TEST_SIZE,
-            "SPLIT_METHOD":      "stratified_random",
+            "SPLIT_METHOD":      "temporal_per_file",
         },
-        "files_processed": [r["meta"] for r in results],
+        "files_processed": file_split_meta,
         "files_skipped":   skipped,
         "split_summary": {
             "train": {

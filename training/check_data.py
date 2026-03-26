@@ -1,68 +1,93 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
-import random
 
-# 1. Đường dẫn tới file data đã lưu
-DATA_PATH = "data/wifi_sensing_dataset.npz"
+# Import cấu hình từ file config.py cùng thư mục
+from config import Config
 
-def plot_random_samples():
-    print("Đang load dữ liệu...")
-    data = np.load(DATA_PATH)
-    X_train = data['X_train']
-    Y_train = data['Y_train']
-    
-    # Tìm index của nhãn 0 (empty) và nhãn 1 (breathing)
-    empty_idx = np.where(Y_train == 0)[0]
-    breath_idx = np.where(Y_train == 1)[0]
-    
-    if len(empty_idx) == 0 or len(breath_idx) == 0:
-        print("Thiếu dữ liệu của một trong hai nhãn để plot!")
+def inspect_dataset():
+    cfg = Config()
+    print("="*50)
+    print("🔍 KIỂM TRA VÀ ĐÁNH GIÁ DỮ LIỆU (.npz)")
+    print("="*50)
+
+    # 1. Load data
+    print(f"📂 Đang đọc file: {cfg.DATA_PATH}")
+    if not os.path.exists(cfg.DATA_PATH):
+        print(f"❌ Lỗi: Không tìm thấy file tại {cfg.DATA_PATH}")
+        print("Hãy chắc chắn bạn đã copy file wifi_sensing_dataset.npz vào thư mục data/")
         return
 
-    # Chọn ngẫu nhiên 1 mẫu empty và 1 mẫu breathing
-    idx_e = random.choice(empty_idx)
-    idx_b = random.choice(breath_idx)
+    data = np.load(cfg.DATA_PATH)
+    X_train = data['X_train']
+    Y_train = data['Y_train']
+    X_test  = data['X_test']
+    Y_test  = data['Y_test']
+
+    # 2. In kích thước (Shapes)
+    print("\n📏 1. KÍCH THƯỚC DỮ LIỆU (SHAPES):")
+    print(f"   X_train: {X_train.shape} | Y_train: {Y_train.shape}")
+    print(f"   X_test : {X_test.shape}  | Y_test : {Y_test.shape}")
     
-    samples = [
-        (idx_e, "EMPTY (Label 0)", X_train[idx_e]),
-        (idx_b, "BREATHING (Label 1)", X_train[idx_b])
-    ]
+    # Kiểm tra xem có đúng định dạng (N, 150, 53, 2) cho 3s @ 50Hz không
+    expected_time_steps = int(3.0 * 50.0) # 150
+    if X_train.shape[1] == expected_time_steps:
+        print(f"   ✅ Trục thời gian chuẩn xác: {expected_time_steps} samples (3 giây ở 50Hz).")
+    else:
+        print(f"   ⚠️ Cảnh báo: Trục thời gian là {X_train.shape[1]}, khác với dự kiến {expected_time_steps}.")
 
-    fig, axes = plt.subplots(3, 2, figsize=(15, 10))
-    fig.suptitle("Kiểm tra chất lượng CSI Data: Empty vs Breathing", fontsize=16)
+    # 3. Kiểm tra dữ liệu hỏng (NaN / Inf)
+    print("\n⚠️ 2. KIỂM TRA DỮ LIỆU LỖI (NaN/Inf):")
+    has_nan = np.isnan(X_train).any() or np.isnan(X_test).any()
+    has_inf = np.isinf(X_train).any() or np.isinf(X_test).any()
+    print(f"   Chứa giá trị NaN (Not a Number): {'Có ❌' if has_nan else 'Không ✅'}")
+    print(f"   Chứa giá trị Inf (Vô cực):       {'Có ❌' if has_inf else 'Không ✅'}")
 
-    for col, (idx, title, tensor) in enumerate(samples):
-        # tensor shape: (200, 53, 2) -> (time, subcarriers, macs)
-        mac1_data = tensor[:, :, 0]
-        mac2_data = tensor[:, :, 1]
+    # 4. Phân phối nhãn
+    print("\n📊 3. PHÂN PHỐI NHÃN (CLASS BALANCE):")
+    train_labels, train_counts = np.unique(Y_train, return_counts=True)
+    test_labels, test_counts = np.unique(Y_test, return_counts=True)
+
+    print("   Tập Train:")
+    for label, count in zip(train_labels, train_counts):
+        name = "Empty" if label == 0 else "Presence"
+        print(f"      - {name:<10} (Label {label}): {count:,} mẫu ({(count/len(Y_train))*100:.1f}%)")
+
+    print("   Tập Test:")
+    for label, count in zip(test_labels, test_counts):
+        name = "Empty" if label == 0 else "Presence"
+        print(f"      - {name:<10} (Label {label}): {count:,} mẫu ({(count/len(Y_test))*100:.1f}%)")
+
+    # 5. Trực quan hóa 1 mẫu ngẫu nhiên
+    print("\n🖼️ 4. TRỰC QUAN HÓA (HEATMAP):")
+    presence_idx = np.where(Y_train == 1)[0]
+    
+    if len(presence_idx) > 0:
+        idx = np.random.choice(presence_idx)
+        sample = X_train[idx] # Shape: (150, 53, 2)
         
-        # Hàng 1: Heatmap MAC 1 (Transposed để trục X là thời gian)
-        im1 = axes[0, col].imshow(mac1_data.T, aspect='auto', cmap='jet', origin='lower')
-        axes[0, col].set_title(f"{title} - MAC 1 Heatmap")
-        axes[0, col].set_ylabel("Subcarrier Index")
-        fig.colorbar(im1, ax=axes[0, col])
-
-        # Hàng 2: Heatmap MAC 2
-        im2 = axes[1, col].imshow(mac2_data.T, aspect='auto', cmap='jet', origin='lower')
-        axes[1, col].set_title(f"{title} - MAC 2 Heatmap")
-        axes[1, col].set_ylabel("Subcarrier Index")
-        fig.colorbar(im2, ax=axes[1, col])
-
-        # Hàng 3: Biểu đồ dạng sóng (Lấy trung bình các subcarriers)
-        mean_mac1 = np.mean(mac1_data, axis=1)
-        mean_mac2 = np.mean(mac2_data, axis=1)
-        time_axis = np.linspace(0, 10, 200) # 200 samples = 10s (do 20Hz)
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        fig.suptitle(f"Mẫu Presence ngẫu nhiên (Index: {idx} trong tập Train)", fontsize=14)
         
-        axes[2, col].plot(time_axis, mean_mac1, label="MAC 1", alpha=0.8)
-        axes[2, col].plot(time_axis, mean_mac2, label="MAC 2", alpha=0.8)
-        axes[2, col].set_title(f"{title} - Waveform (Mean over Subcarriers)")
-        axes[2, col].set_xlabel("Time (seconds)")
-        axes[2, col].set_ylabel("Normalized Amplitude")
-        axes[2, col].legend()
-        axes[2, col].grid(True)
+        # Trực quan hóa MAC 1
+        im1 = axes[0].imshow(sample[:, :, 0].T, aspect='auto', cmap='jet', origin='lower')
+        axes[0].set_title("MAC 1 Heatmap (D4:E9:F4:A3:64:80)")
+        axes[0].set_xlabel("Time Steps (150 samples = 3s)")
+        axes[0].set_ylabel("Subcarriers (53)")
+        fig.colorbar(im1, ax=axes[0])
+        
+        # Trực quan hóa MAC 2
+        im2 = axes[1].imshow(sample[:, :, 1].T, aspect='auto', cmap='jet', origin='lower')
+        axes[1].set_title("MAC 2 Heatmap (D4:E9:F4:A4:3C:18)")
+        axes[1].set_xlabel("Time Steps (150 samples = 3s)")
+        axes[1].set_ylabel("Subcarriers (53)")
+        fig.colorbar(im2, ax=axes[1])
+        
+        plt.tight_layout()
+        print("   Đang hiển thị biểu đồ Heatmap... Đóng cửa sổ biểu đồ để kết thúc script.")
+        plt.show()
 
-    plt.tight_layout()
-    plt.show()
+    print("="*50 + "\n")
 
 if __name__ == "__main__":
-    plot_random_samples()
+    inspect_dataset()

@@ -6,7 +6,7 @@ from scipy import interpolate
 import sys
 import os
 
-FILE_PATH = "data/Data/breathing/breath_20260315_084446_realtime.csv"
+FILE_PATH = "data/Data/breathing/breath_20260203_225036_realtime.csv"
 WINDOW_DURATION = 10  # Xem 10 giây một lần
 
 HAMPEL_WINDOW = 5

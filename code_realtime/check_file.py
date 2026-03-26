@@ -10,7 +10,7 @@ from scipy import interpolate
 # ══════════════════════════════════════════════════════
 #  CẤU HÌNH
 # ══════════════════════════════════════════════════════
-FILE_PATH = "data/Data/breathing/breath_20260315_084446.pcap"
+FILE_PATH = "data/Data/empty/empty_20260203_221038.pcap"
 
 TARGET_MACS = [
     bytes.fromhex("d4e9f4a36480"),
@@ -234,7 +234,7 @@ def plot_diagnostics(stats_dict, file_path):
             ax_cmp.plot(seg_mid, s["seg_hz"],
                         color=colors[i % 2], lw=1.5, alpha=0.8,
                         label=mac_labels[i])
-        ax_cmp.axhline(15, color="orange", lw=1.5, linestyle=":",
+        ax_cmp.axhline(40, color="orange", lw=1.5, linestyle=":",
                        label="Ngưỡng tối thiểu (15 Hz)")
         ax_cmp.set_title("SO SÁNH TẦN SUẤT 2 MAC THEO THỜI GIAN",
                          fontsize=10, fontweight="bold")
