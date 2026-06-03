@@ -1,8 +1,12 @@
 torch>=2.0.0
 torchvision
 numpy
+scipy
+pandas
 scikit-learn
 matplotlib
 seaborn
 tqdm
 tensorboard
+websockets
+opencv-python

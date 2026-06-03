@@ -1,89 +1,216 @@
-# PBL5 - WiFi Sensing for Breathing Detection
+# PBL5 — WiFi Sensing for Breathing Detection
 
-## Mô tả dự án
-Dự án PBL5 là một hệ thống phát hiện hơi thở dựa trên tín hiệu WiFi (WiFi Sensing) sử dụng Channel State Information (CSI). Dự án bao gồm việc thu thập dữ liệu từ PCAP files, tiền xử lý dữ liệu realtime, và huấn luyện mô hình Machine Learning (PyTorch) để phân loại các hoạt động như thở, không thở, và giữ hơi.
+Hệ thống phát hiện nhịp thở thời gian thực sử dụng **Channel State Information (CSI)** từ tín hiệu WiFi, kết hợp Raspberry Pi 4 (edge AI) và Mac (gateway + dashboard).
 
-## Cài đặt
-1. Đảm bảo bạn có Python 3.8+ cài đặt.
-2. Cài đặt các thư viện cần thiết:
-   ```
-   cd training
-   pip install -r requirements.txt
-   ```
-3. Dự án hỗ trợ GPU MPS (Mac M1/M2/M3), CUDA, hoặc CPU.
+## Kiến Trúc Hệ Thống
 
-## Cấu trúc dự án
+```
+[WiFi CSI Tool]
+       ↓ UDP :5500
+[Raspberry Pi 4]  ←── edge/pi_edge_ai.py ───→ ONNX Inference
+       ↓ TCP :9999
+[Mac Gateway]     ←── gateway/mac_gateway.py → SQLite DB
+       ↓ WebSocket :8765
+[Dashboard]       ←── gateway/dashboard.html
+```
 
-### 1. Folder `code_realtime/`
-Chứa các script xử lý dữ liệu từ PCAP và CSV files.
+## Cấu Trúc Thư Mục
 
-- `build_pcap.py`: Xây dựng dataset, script xây dựng và xử lý file PCAP. Sử dụng để chuyển đổi dữ liệu thô thành định dạng có thể sử dụng training.
-- `check_file.py`: Kiểm tra tính toàn vẹn của file dữ liệu. Chạy trước khi xử lý để đảm bảo file không bị lỗi.
-- `check_header.py`: Kiểm tra header của file PCAP. Sử dụng để xác minh cấu trúc packet.
-- `check_mac.py`: Kiểm tra địa chỉ MAC trong dữ liệu. Hữu ích để lọc dữ liệu từ thiết bị cụ thể.
-- `conver_pcap.py`: Chuyển đổi file PCAP sang định dạng khác (có thể là CSV). Sử dụng khi cần export dữ liệu.
-- `debug_pcap.py`: Script debug cho file PCAP. Sử dụng để phân tích và sửa lỗi trong dữ liệu.
-- `plot_csv.py`: Vẽ biểu đồ từ file CSV. 
-- `plot.py`: Vẽ biểu đồ cho file pcap.
-- `preprocess.py`: Tiền xử lý dữ liệu realtime. Bao gồm Hampel filter, interpolation. Chạy script này để làm sạch dữ liệu trước khi feed vào model.
-- Cách sử dụng: Chạy từng script riêng lẻ, ví dụ `python preprocess.py` để tiền xử lý file CSV cụ thể (cấu hình trong script).
+```
+PBL5/
+├── config.py               # Cấu hình tập trung (DSP, Training, Network, ...)
+├── requirements.txt        # Toàn bộ dependencies
+│
+├── src/                    # Source code chính
+│   ├── dsp/                # Xử lý tín hiệu (DSP)
+│   │   ├── filters.py      # Hampel filter
+│   │   ├── interpolation.py # FFT Shift, nội suy DC, resample
+│   │   └── pipeline.py     # Pipeline DSP đầu-cuối
+│   ├── data/               # Dataset loading
+│   │   ├── dataset.py      # CSIDataset + get_dataloaders
+│   │   └── build_dataset.py # Xây dựng .npz từ DB
+│   ├── models/
+│   │   └── light_resnet.py # Kiến trúc LightResNet
+│   └── utils/
+│       ├── engine.py       # Training/Eval engine
+│       ├── metrics.py      # Metrics + confusion matrix
+│       ├── logger.py       # AverageMeter, Logger
+│       └── seed.py         # Reproducibility
+│
+├── scripts/                # Entry-point scripts
+│   ├── train.py            # Huấn luyện mô hình
+│   ├── evaluate.py         # Đánh giá mô hình
+│   ├── build_dataset.py    # Xây dựng dataset từ DB
+│   ├── export_onnx.py      # Export sang ONNX
+│   └── export_csi.py       # Export CSI raw ra CSV/NPY
+│
+├── edge/                   # Code chạy trên Raspberry Pi
+│   └── pi_edge_ai.py
+│
+├── gateway/                # Code chạy trên Mac
+│   ├── mac_gateway.py
+│   └── dashboard.html
+│
+├── visualization/          # Tất cả visualization scripts
+│   ├── plot_pcap.py        # Heatmap + 3D surface từ file PCAP
+│   ├── plot_csv.py         # Dashboard từ file CSV (có slider)
+│   ├── plot_dataset.py     # Phân tích dataset .npz
+│   ├── plot_training.py    # Training curves từ TensorBoard
+│   ├── run_all.py          # Chạy toàn bộ pipeline một lệnh
+│   └── output/             # ← Tất cả ảnh xuất ra đây
+│
+├── data_collection/        # Scripts thu thập và debug PCAP/CSV
+│   ├── preprocess.py       # Tiền xử lý file CSV
+│   ├── build_pcap.py
+│   └── ...
+│
+├── data/                   # Dữ liệu thô (không commit lên git)
+│   ├── Data/breathing/     # PCAP + CSV cho hoạt động thở
+│   ├── Data/empty/         # PCAP + CSV cho phòng trống
+│   └── wifi_sensing_dataset.npz  # Dataset đã xử lý
+│
+├── artifacts/              # Model files
+│   ├── checkpoints/        # PyTorch checkpoints (.pth)
+│   ├── runs/               # TensorBoard logs
+│   └── csi_lightresnet.onnx
+│
+└── tests/                  # Unit tests
+    ├── test_dsp.py
+    ├── test_model.py
+    └── test_dataset.py
+```
 
-### 2. Folder `data/`
-Chứa dữ liệu thô và đã xử lý.
+## Cài Đặt
 
-- `receiver.sh`: Script shell để thu thập dữ liệu từ thiết bị. Chạy `./receiver.sh` để bắt đầu thu thập packet WiFi.
-- `wifi_sensing_dataset_meta.json`: Metadata của dataset. Chứa thông tin cấu hình như WINDOW_SEC, TARGET_FS, và chi tiết từng file đã xử lý (số windows, shape tensor, MAC addresses).
-- `wifi_sensing_dataset.npz`: Dataset đã xử lý dưới dạng NumPy compressed. Sử dụng trong training.
-- Subfolder `Data/` chứa các file raw thu thập:
-  - `breathing/`: File PCAP và CSV cho hoạt động thở. Ví dụ: `breath_20260203_215850.pcap` và `breath_20260203_215850_realtime.csv`.
-  - `empty/`: File cho trạng thái không có hoạt động (empty room).
-  - `empty_tmp/`: File tạm thời cho empty, có thể dùng để test.
-- Cách sử dụng: Sử dụng `receiver.sh` kết hợp với `sender.sh` trên raspberry pi 4 để thu thập dữ liệu mới. Đọc metadata từ JSON để hiểu cấu trúc dataset.
+```bash
+# Clone và cài dependencies
+pip install -r requirements.txt
+```
 
-### 3. Folder `models/`
-Chứa checkpoints và logs của mô hình.
+## Workflow
 
-- `checkpoints/`: Lưu trữ các checkpoint mô hình đã huấn luyện.
-- `runs/`: Logs từ TensorBoard.
-- Cách sử dụng: Sau khi training, kiểm tra checkpoints để load model. Sử dụng TensorBoard để visualize training: `tensorboard --logdir models/runs`.
+### 1. Thu Thập Dữ Liệu
 
-### 4. Folder `paper/`
-Chứa tài liệu nghiên cứu hoặc báo cáo liên quan đến dự án. (Hiện tại trống, có thể thêm PDF hoặc docs.)
+```bash
+# Trên Raspberry Pi: gửi CSI packets
+bash data/receiver.sh
 
-### 5. Folder `training/`
-Chứa code huấn luyện và đánh giá mô hình.
+# Trên Mac: khởi động gateway để nhận và lưu vào DB
+python gateway/mac_gateway.py
 
-- `check_data.py`: Kiểm tra dữ liệu trước khi training. Chạy `python check_data.py` để validate dataset.
-- `config.py`: File cấu hình. Định nghĩa paths, batch size, epochs, device (MPS/CUDA/CPU). Sửa đổi các tham số ở đây trước khi training.
-- `evaluate.py`: Đánh giá mô hình trên test set. Chạy `python evaluate.py` sau khi training để xem metrics và confusion matrix.
-- `requirements.txt`: Danh sách thư viện cần thiết (torch, numpy, v.v.).
-- `train.py`: Script chính để huấn luyện mô hình. Chạy `python train.py` để bắt đầu training với LightResNet.
-- `__pycache__/`: Thư mục cache Python (tự động tạo).
-- `log/`: Logs từ training.
-- `model/`:
-  - `model.py`: Định nghĩa mô hình LightResNet.
-  - `checkpoints/`: Checkpoint từ training.
-  - `runs/`: TensorBoard logs.
-- `utils/`:
-  - `dataset.py`: Xử lý dataset, tạo DataLoaders.
-  - `engine.py`: Engine training/validation.
-  - `logger.py`: Logging utilities.
-  - `utils.py`: Các hàm tiện ích, như calculate_metrics, plot_confusion_matrix.
-- Cách sử dụng:
-  1. Cấu hình trong `config.py`.
-  2. Chạy `python train.py` để huấn luyện.
-  3. Chạy `python evaluate.py` để đánh giá.
-  4. Sử dụng TensorBoard: `tensorboard --logdir training/model/runs`.
+# Mở dashboard để gán nhãn
+open gateway/dashboard.html
+```
 
-## Hướng dẫn sử dụng tổng thể
-1. **Thu thập dữ liệu**: Chạy `data/receiver.sh` để thu thập PCAP.
-2. **Xử lý realtime**: Sử dụng scripts trong `code_realtime/` để preprocess và visualize.
-3. **Chuẩn bị dataset**: Đảm bảo `data/wifi_sensing_dataset.npz` có sẵn.
-4. **Huấn luyện**: Chạy `training/train.py`.
-5. **Đánh giá**: Chạy `training/evaluate.py`.
+### 2. Xây Dựng Dataset
 
-## Lưu ý
-- Đảm bảo paths trong config đúng.
-- Dataset labels: 0 (empty), 1 (breathing).
-## Tác giả
-Huỳnh Cảnh Viên - Phạm Nhật Khoa - Phạm Quang Thắng
+```bash
+# Từ SQLite DB → wifi_sensing_dataset.npz
+python scripts/build_dataset.py
+# hoặc chỉ định path:
+python scripts/build_dataset.py --db wifi_sensing.db --out data/wifi_sensing_dataset.npz
+```
+
+### 3. Huấn Luyện
+
+```bash
+python scripts/train.py
+# Tùy chỉnh:
+python scripts/train.py --epochs 100 --lr 5e-4 --batch 32
+```
+
+Theo dõi bằng TensorBoard:
+```bash
+tensorboard --logdir artifacts/runs
+```
+
+### 4. Đánh Giá
+
+```bash
+python scripts/evaluate.py
+```
+
+### 5. Export ONNX (để chạy trên Pi)
+
+```bash
+python scripts/export_onnx.py
+# → artifacts/csi_lightresnet.onnx
+```
+
+Sao chép file ONNX sang Raspberry Pi và chạy:
+```bash
+python edge/pi_edge_ai.py
+```
+
+### 6. Export CSI Raw (để phân tích)
+
+```bash
+python scripts/export_csi.py --list          # Liệt kê sessions
+python scripts/export_csi.py --session 0     # Xuất session 0
+```
+
+## Visualization
+
+Tất cả ảnh được lưu tự động vào `visualization/output/`.
+
+```bash
+# Chạy toàn bộ pipeline một lệnh (batch mode, không hiện cửa sổ)
+python visualization/run_all.py
+
+# Hoặc từng script riêng:
+
+# Vẽ từ file PCAP (heatmap 2D + 3D surface)
+python visualization/plot_pcap.py --file data/Data/breathing/breath_xxx.pcap
+
+# Vẽ dashboard từ file CSV (có slider tương tác)
+python visualization/plot_csv.py --file data/Data/breathing/breath_xxx_realtime.csv
+
+# Phân tích dataset (heatmap samples + class distribution + amplitude histogram)
+python visualization/plot_dataset.py
+
+# Training curves + Confusion Matrix
+python visualization/plot_training.py
+```
+
+| Script | Output | Mô tả |
+|--------|--------|-------|
+| `plot_pcap.py` | `pcap_<name>.png` | Heatmap CSI + 3D surface từ PCAP |
+| `plot_csv.py` | `csv_<name>.png` | Dashboard 3 cột với slider thời gian |
+| `plot_dataset.py` | `dataset_*.png` (3 file) | Heatmap samples, class distribution, amplitude histogram |
+| `plot_training.py` | `training_<run>.png` | Loss/Accuracy/LR curves từ TensorBoard |
+| `run_all.py` | tất cả ảnh trên | Master script chạy mọi thứ |
+
+## Tests
+
+```bash
+# Chạy toàn bộ tests
+python -m pytest tests/ -v
+
+# Chạy test cụ thể
+python -m pytest tests/test_dsp.py -v
+```
+
+## Cấu Hình
+
+Tất cả tham số được quản lý tập trung tại [`config.py`](config.py):
+
+| Class | Mục đích |
+|-------|---------|
+| `Paths` | Đường dẫn file/thư mục |
+| `Hardware` | MAC addresses |
+| `DSP` | Tham số xử lý tín hiệu |
+| `DatasetConfig` | Nhãn, số lớp, tỷ lệ split |
+| `TrainingConfig` | Batch size, epochs, learning rate |
+| `NetworkConfig` | Port TCP/WebSocket/UDP |
+| `ExportConfig` | Cấu hình export CSV |
+
+## Nhãn Dataset
+
+| Label | Mô tả |
+|-------|-------|
+| `0` — Empty | Phòng trống, không có người |
+| `1` — Breathing | Có người đang thở bình thường |
+
+## Tác Giả
+
+Huỳnh Cảnh Viên · Phạm Nhật Khoa · Phạm Quang Thắng
