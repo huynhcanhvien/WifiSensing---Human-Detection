@@ -22,8 +22,12 @@ import json
 import os
 import socket
 import sqlite3
+import sys
 import threading
 from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import websockets
 

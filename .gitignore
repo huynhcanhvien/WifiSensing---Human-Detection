@@ -1,28 +1,85 @@
-# Ignore large, generated or local data files
-/data/
-/paper/
-
-# Python bytecode
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 
 # Virtual environments
+.venv/
 venv/
+env/
 .env/
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb
 
-# Misc
+# mypy / pyright
+.mypy_cache/
+.pyright/
+
+# ─── Node / Frontend (gateway/frontend) ───────────────────────────────────────
+gateway/frontend/node_modules/
+gateway/frontend/dist/
+gateway/frontend/.vite/
+
+# Vite local env files
+gateway/frontend/.env
+gateway/frontend/.env.local
+gateway/frontend/.env.*.local
+
+# ─── Data & Artifacts ─────────────────────────────────────────────────────────
+# Raw data không commit (thường rất lớn)
+data/Data/
+data/*.npz
+data/*.json
+
+# SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+# Model artifacts
+artifacts/checkpoints/
+artifacts/runs/
+*.pth
+*.onnx
+
+# Export outputs
+exports/
+
+# ─── Visualization output ─────────────────────────────────────────────────────
+# Giữ thư mục nhưng bỏ qua các ảnh được sinh ra tự động
+visualization/output/*.png
+visualization/output/*.jpg
+visualization/output/*.svg
+visualization/output/*.pdf
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+training/log/
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ─── Editor ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
 *.swp
+*.swo
+*~
 
-# Agents
+# ─── Tools ────────────────────────────────────────────────────────────────────
 .claude/
+.gemini/
+
+# docs
+paper/

@@ -50,7 +50,7 @@ class DSP:
 
     # Subcarrier mapping (802.11n / HT20, 64 subcarriers)
     NULL_SUBCARRIERS  = [0,1,2,3,4,5,29,30,31,32,33,34,59,60,61,62,63]
-    VALID_SUBCARRIERS = [i for i in range(64) if i not in NULL_SUBCARRIERS]
+    VALID_SUBCARRIERS = [i for i in range(64) if i not in [0,1,2,3,4,5,29,30,31,32,33,34,59,60,61,62,63]]
     EFFECTIVE_SC_START = 6   # sau khi FFTshift + nội suy, lấy [6:59]
     EFFECTIVE_SC_END   = 59  # → 53 subcarrier hữu ích
 
