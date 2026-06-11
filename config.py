@@ -6,7 +6,6 @@ Tất cả hằng số dùng chung giữa các module (DSP, training, edge, gate
 """
 
 import os
-import torch
 from datetime import datetime
 from pathlib import Path
 
@@ -78,13 +77,17 @@ class TrainingConfig:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return str(Paths.RUNS / f"experiment_{ts}")
 
-    # Tự động nhận diện device
-    if torch.backends.mps.is_available():
-        DEVICE = torch.device("mps")
-    elif torch.cuda.is_available():
-        DEVICE = torch.device("cuda")
-    else:
-        DEVICE = torch.device("cpu")
+    # Tự động nhận diện device — lazy import để không bắt buộc torch trên Pi
+    try:
+        import torch as _torch
+        if _torch.backends.mps.is_available():
+            DEVICE = _torch.device("mps")
+        elif _torch.cuda.is_available():
+            DEVICE = _torch.device("cuda")
+        else:
+            DEVICE = _torch.device("cpu")
+    except ImportError:
+        DEVICE = "cpu"
 
 # ─── Network (Gateway & Edge) ─────────────────────────────────────────────────
 class NetworkConfig:
